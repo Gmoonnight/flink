@@ -33,10 +33,13 @@ import org.apache.flink.table.api.java.{StreamTableEnvironment => JavaStreamTabl
 import org.apache.flink.table.api.scala.internal.{StreamTableEnvironmentImpl => ScalaStreamTableEnvImpl}
 import org.apache.flink.table.api.scala.{StreamTableEnvironment => ScalaStreamTableEnv}
 import org.apache.flink.table.catalog.{CatalogManager, FunctionCatalog, GenericInMemoryCatalog, ObjectIdentifier}
-import org.apache.flink.table.dataformat.BaseRow
+import org.apache.flink.table.data.RowData
 import org.apache.flink.table.delegation.{Executor, ExecutorFactory, PlannerFactory}
+import org.apache.flink.table.descriptors.ConnectorDescriptorValidator.CONNECTOR_TYPE
+import org.apache.flink.table.descriptors.{CustomConnectorDescriptor, DescriptorProperties, Schema}
+import org.apache.flink.table.descriptors.Schema.SCHEMA
 import org.apache.flink.table.expressions.Expression
-import org.apache.flink.table.factories.ComponentFactoryService
+import org.apache.flink.table.factories.{ComponentFactoryService, StreamTableSourceFactory}
 import org.apache.flink.table.functions._
 import org.apache.flink.table.module.ModuleManager
 import org.apache.flink.table.operations.ddl.CreateTableOperation
@@ -59,7 +62,6 @@ import org.apache.flink.table.types.logical.LogicalType
 import org.apache.flink.table.types.utils.TypeConversions
 import org.apache.flink.table.typeutils.FieldInfoUtils
 import org.apache.flink.types.Row
-
 import org.apache.calcite.avatica.util.TimeUnit
 import org.apache.calcite.rel.RelNode
 import org.apache.calcite.sql.parser.SqlParserPos
@@ -68,7 +70,6 @@ import org.apache.commons.lang3.SystemUtils
 import org.junit.Assert.{assertEquals, assertTrue}
 import org.junit.Rule
 import org.junit.rules.{ExpectedException, TemporaryFolder, TestName}
-
 import _root_.java.math.{BigDecimal => JBigDecimal}
 import _root_.java.util
 
@@ -127,9 +128,9 @@ abstract class TableTestUtilBase(test: TableTestBase, isStreamingMode: Boolean) 
   protected lazy val diffRepository: DiffRepository = DiffRepository.lookup(test.getClass)
 
   protected val setting: EnvironmentSettings = if (isStreamingMode) {
-    EnvironmentSettings.newInstance().useBlinkPlanner().inStreamingMode().build()
+    EnvironmentSettings.newInstance().inStreamingMode().build()
   } else {
-    EnvironmentSettings.newInstance().useBlinkPlanner().inBatchMode().build()
+    EnvironmentSettings.newInstance().inBatchMode().build()
   }
 
   // a counter for unique table names
@@ -257,6 +258,20 @@ abstract class TableTestUtilBase(test: TableTestBase, isStreamingMode: Boolean) 
     */
   def addFunction(name: String, function: ScalarFunction): Unit = {
     getTableEnv.registerFunction(name, function)
+  }
+
+  /**
+   * Registers a [[UserDefinedFunction]] according to FLIP-65.
+   */
+  def addTemporarySystemFunction(name: String, function: UserDefinedFunction): Unit = {
+    getTableEnv.createTemporarySystemFunction(name, function)
+  }
+
+  /**
+   * Registers a [[UserDefinedFunction]] class according to FLIP-65.
+   */
+  def addTemporarySystemFunction(name: String, function: Class[_ <: UserDefinedFunction]): Unit = {
+    getTableEnv.createTemporarySystemFunction(name, function)
   }
 
   def verifyPlan(sql: String): Unit = {
@@ -565,13 +580,6 @@ abstract class TableTestUtil(
   }
 
   /**
-   * Registers a [[UserDefinedFunction]] according to FLIP-65.
-   */
-  def addTemporarySystemFunction(name: String, function: UserDefinedFunction): Unit = {
-    testingTableEnv.createTemporarySystemFunction(name, function)
-  }
-
-  /**
     * Registers a [[TableFunction]] under given name into the TableEnvironment's catalog.
     */
   def addFunction[T: TypeInformation](
@@ -845,7 +853,7 @@ case class StreamTableTestUtil(
   def createUpsertTableSink(
       keys: Array[Int],
       fieldNames: Array[String],
-      fieldTypes: Array[LogicalType]): UpsertStreamTableSink[BaseRow] = {
+      fieldTypes: Array[LogicalType]): UpsertStreamTableSink[RowData] = {
     require(fieldNames.length == fieldTypes.length)
     val typeInfos = fieldTypes.map(fromLogicalTypeToTypeInfo)
     new TestingUpsertTableSink(keys).configure(fieldNames, typeInfos)
@@ -949,6 +957,44 @@ class TestTableSource(override val isBounded: Boolean, schema: TableSchema)
   override def getTableSchema: TableSchema = schema
 }
 
+object TestTableSource {
+  def createTemporaryTable(
+      tEnv: TableEnvironment,
+      isBounded: Boolean,
+      tableSchema: TableSchema,
+      tableName: String): Unit = {
+    tEnv.connect(
+      new CustomConnectorDescriptor("TestTableSource", 1, false)
+        .property("is-bounded", if (isBounded) "true" else "false"))
+      .withSchema(new Schema().schema(tableSchema))
+      .createTemporaryTable(tableName)
+
+  }
+}
+
+class TestTableSourceFactory extends StreamTableSourceFactory[Row] {
+  override def createStreamTableSource(
+      properties: util.Map[String, String]): StreamTableSource[Row] = {
+    val dp = new DescriptorProperties
+    dp.putProperties(properties)
+    val tableSchema = dp.getTableSchema(SCHEMA)
+    val isBounded = dp.getOptionalBoolean("is-bounded").orElse(false)
+    new TestTableSource(isBounded, tableSchema)
+  }
+
+  override def requiredContext(): util.Map[String, String] = {
+    val context = new util.HashMap[String, String]()
+    context.put(CONNECTOR_TYPE, "TestTableSource")
+    context
+  }
+
+  override def supportedProperties(): util.List[String] = {
+    val properties = new util.ArrayList[String]()
+    properties.add("*")
+    properties
+  }
+}
+
 class TestingTableEnvironment private(
     catalogManager: CatalogManager,
     moduleManager: ModuleManager,
@@ -1045,7 +1091,7 @@ class TestingTableEnvironment private(
   }
 
   override def explain(extended: Boolean): String = {
-    planner.explain(bufferedOperations.toList, extended)
+    planner.explain(bufferedOperations.toList, getExplainDetails(extended): _*)
   }
 
   @throws[Exception]
@@ -1117,10 +1163,9 @@ object TestingTableEnvironment {
 
 object TableTestUtil {
 
-  val STREAM_SETTING: EnvironmentSettings = EnvironmentSettings.newInstance()
-    .useBlinkPlanner().inStreamingMode().build()
-  val BATCH_SETTING: EnvironmentSettings = EnvironmentSettings.newInstance()
-    .useBlinkPlanner().inBatchMode().build()
+  val STREAM_SETTING: EnvironmentSettings =
+    EnvironmentSettings.newInstance().inStreamingMode().build()
+  val BATCH_SETTING: EnvironmentSettings = EnvironmentSettings.newInstance().inBatchMode().build()
 
   /**
     * Converts operation tree in the given table to a RelNode tree.

@@ -39,8 +39,8 @@ import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.inference.TypeInference;
 import org.apache.flink.table.types.inference.TypeStrategies;
 import org.apache.flink.table.types.logical.RawType;
-import org.apache.flink.table.utils.EncodingUtils;
 import org.apache.flink.types.Row;
+import org.apache.flink.util.StringUtils;
 
 import org.junit.Test;
 
@@ -48,6 +48,7 @@ import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.time.DayOfWeek;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
@@ -471,6 +472,32 @@ public class FunctionITCase extends StreamingTestBase {
 	}
 
 	@Test
+	public void testNullScalarFunction() throws Exception {
+		final List<Row> sinkData = Collections.singletonList(
+			Row.of("Boolean", "String", "<<unknown>>", "String", "Object", "Boolean"));
+
+		TestCollectionTableFactory.reset();
+
+		tEnv().sqlUpdate(
+			"CREATE TABLE TestTable(s1 STRING, s2 STRING, s3 STRING, s4 STRING, s5 STRING, s6 STRING) " +
+			"WITH ('connector' = 'COLLECTION')");
+
+		tEnv().createTemporarySystemFunction("ClassNameScalarFunction", ClassNameScalarFunction.class);
+		tEnv().createTemporarySystemFunction("ClassNameOrUnknownScalarFunction", ClassNameOrUnknownScalarFunction.class);
+		tEnv().createTemporarySystemFunction("WildcardClassNameScalarFunction", WildcardClassNameScalarFunction.class);
+		tEnv().sqlUpdate("INSERT INTO TestTable SELECT " +
+			"ClassNameScalarFunction(NULL), " +
+			"ClassNameScalarFunction(CAST(NULL AS STRING)), " +
+			"ClassNameOrUnknownScalarFunction(NULL), " +
+			"ClassNameOrUnknownScalarFunction(CAST(NULL AS STRING)), " +
+			"WildcardClassNameScalarFunction(NULL), " +
+			"WildcardClassNameScalarFunction(CAST(NULL AS BOOLEAN))");
+		tEnv().execute("Test Job");
+
+		assertThat(TestCollectionTableFactory.getResult(), equalTo(sinkData));
+	}
+
+	@Test
 	public void testRowScalarFunction() throws Exception {
 		final List<Row> sourceData = Arrays.asList(
 			Row.of(1, Row.of(1, "1")),
@@ -838,7 +865,7 @@ public class FunctionITCase extends StreamingTestBase {
 	 */
 	public static class ComplexScalarFunction extends ScalarFunction {
 		public String eval(@DataTypeHint(inputGroup = InputGroup.ANY) Object o, java.sql.Timestamp t) {
-			return EncodingUtils.objectToString(o) + "+" + t.toString();
+			return StringUtils.arrayAwareToString(o) + "+" + t.toString();
 		}
 
 		public @DataTypeHint("DECIMAL(5, 2)") BigDecimal eval() {
@@ -942,6 +969,56 @@ public class FunctionITCase extends StreamingTestBase {
 			} else {
 				collect(i);
 			}
+		}
+	}
+
+	/**
+	 * Function that returns which method has been called.
+	 *
+	 * <p>{@code f(NULL)} is determined by alphabetical method signature order.
+	 */
+	@SuppressWarnings("unused")
+	public static class ClassNameScalarFunction extends ScalarFunction {
+
+		public String eval(Integer i) {
+			return "Integer";
+		}
+
+		public String eval(Boolean b) {
+			return "Boolean";
+		}
+
+		public String eval(String s) {
+			return "String";
+		}
+	}
+
+	/**
+	 * Function that returns which method has been called including {@code unknown}.
+	 */
+	@SuppressWarnings("unused")
+	public static class ClassNameOrUnknownScalarFunction extends ClassNameScalarFunction {
+
+		public String eval(@DataTypeHint("NULL") Object o) {
+			return "<<unknown>>";
+		}
+	}
+
+	/**
+	 * Function that returns which method has been called but with default input type inference.
+	 */
+	@SuppressWarnings("unused")
+	public static class WildcardClassNameScalarFunction extends ClassNameScalarFunction {
+
+		public String eval(Object o) {
+			return "Object";
+		}
+
+		@Override
+		public TypeInference getTypeInference(DataTypeFactory typeFactory) {
+			return TypeInference.newBuilder()
+				.outputTypeStrategy(TypeStrategies.explicit(DataTypes.STRING()))
+				.build();
 		}
 	}
 }

@@ -98,7 +98,7 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 
 	private static final Time timeout = Time.seconds(10L);
 
-	private static TestingRpcService RPC;
+	private static TestingRpcService rpc;
 
 	private final TestingHighAvailabilityServices haServices = new TestingHighAvailabilityServices();
 	private final SettableLeaderRetrievalService jobManagerLeaderRetriever = new SettableLeaderRetrievalService();
@@ -116,17 +116,17 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 
 	@After
 	public void shutdown() {
-		RPC.clearGateways();
+		rpc.clearGateways();
 	}
 
 	@BeforeClass
 	public static void setupClass() {
-		RPC = new TestingRpcService();
+		rpc = new TestingRpcService();
 	}
 
 	@AfterClass
 	public static void shutdownClass() throws ExecutionException, InterruptedException {
-		RPC.stopService().get();
+		rpc.stopService().get();
 	}
 
 	@Test
@@ -151,14 +151,17 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 				return CompletableFuture.completedFuture(Acknowledge.get());
 			}).build();
 
-		final JobManagerConnection jobManagerConnection = TaskSubmissionTestEnvironment.createJobManagerConnection(
-			jobId, jobMasterGateway, RPC, new NoOpTaskManagerActions(), timeout);
-
-		final JobManagerTable jobManagerTable = new JobManagerTable();
-		jobManagerTable.put(jobId, jobManagerConnection);
+		final DefaultJobTable jobTable = DefaultJobTable.create();
+		TaskSubmissionTestEnvironment.registerJobMasterConnection(
+			jobTable,
+			jobId,
+			rpc,
+			jobMasterGateway,
+			new NoOpTaskManagerActions(),
+			timeout);
 
 		final TaskManagerServices taskManagerServices = new TaskManagerServicesBuilder()
-			.setJobManagerTable(jobManagerTable)
+			.setJobTable(jobTable)
 			.setShuffleEnvironment(new NettyShuffleEnvironmentBuilder().build())
 			.setTaskSlotTable(createTaskSlotTable())
 			.build();
@@ -197,7 +200,7 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 			trackerIsTrackingPartitions.set(false);
 
 			// the TM should check whether partitions are still stored, and afterwards terminate the connection
-			releaseOrPromoteCall.accept(taskExecutor, jobId, resultPartitionId);
+			releaseOrPromoteCall.accept(taskExecutorGateway, jobId, resultPartitionId);
 
 			disconnectFuture.get();
 		} finally {
@@ -360,8 +363,8 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 			final TaskExecutorGateway taskExecutorGateway = taskExecutor.getSelfGateway(TaskExecutorGateway.class);
 
 			final String jobMasterAddress = "jm";
-			RPC.registerGateway(jobMasterAddress, jobMasterGateway);
-			RPC.registerGateway(testingResourceManagerGateway.getAddress(), testingResourceManagerGateway);
+			rpc.registerGateway(jobMasterAddress, jobMasterGateway);
+			rpc.registerGateway(testingResourceManagerGateway.getAddress(), testingResourceManagerGateway);
 
 			// inform the task manager about the job leader
 			taskManagerServices.getJobLeaderService().addJob(jobId, jobMasterAddress);
@@ -447,7 +450,7 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 	private TestingTaskExecutor createTestingTaskExecutor(TaskManagerServices taskManagerServices, TaskExecutorPartitionTracker partitionTracker) throws IOException {
 			final Configuration configuration = new Configuration();
 		return new TestingTaskExecutor(
-			RPC,
+			rpc,
 			TaskManagerConfiguration.fromConfiguration(configuration, TaskExecutorResourceUtils.resourceSpecFromConfigForLocalExecution(configuration)),
 			haServices,
 			taskManagerServices,
@@ -460,7 +463,7 @@ public class TaskExecutorPartitionLifecycleTest extends TestLogger {
 				null),
 			new TestingFatalErrorHandler(),
 			partitionTracker,
-			TaskManagerRunner.createBackPressureSampleService(configuration, RPC.getScheduledExecutor()));
+			TaskManagerRunner.createBackPressureSampleService(configuration, rpc.getScheduledExecutor()));
 	}
 
 	private static TaskSlotTable<Task> createTaskSlotTable() {

@@ -30,6 +30,64 @@ to learn about the concepts behind stateful stream processing.
 * ToC
 {:toc}
 
+## Keyed DataStream
+
+If you want to use keyed state, you first need to specify a key on a
+`DataStream` that should be used to partition the state (and also the records
+in the stream themselves). You can specify a key using `keyBy(KeySelector)` on
+a `DataStream`. This will yield a `KeyedDataStream`, which then allows
+operations that use keyed state.
+
+A key selector function takes a single record as input and returns the key for
+that record. The key can be of any type and **must** be derived from
+deterministic computations.
+
+The data model of Flink is not based on key-value pairs. Therefore, you do not
+need to physically pack the data set types into keys and values. Keys are
+"virtual": they are defined as functions over the actual data to guide the
+grouping operator.
+
+The following example shows a key selector function that simply returns the
+field of an object:
+
+<div class="codetabs" markdown="1">
+<div data-lang="java" markdown="1">
+{% highlight java %}
+// some ordinary POJO
+public class WC {
+  public String word;
+  public int count;
+
+  public String getWord() { return word; }
+}
+DataStream<WC> words = // [...]
+KeyedStream<WC> keyed = words
+  .keyBy(WC::getWord);
+{% endhighlight %}
+
+</div>
+<div data-lang="scala" markdown="1">
+{% highlight scala %}
+// some ordinary case class
+case class WC(word: String, count: Int)
+val words: DataStream[WC] = // [...]
+val keyed = words.keyBy( _.word )
+{% endhighlight %}
+</div>
+</div>
+
+### Tuple Keys and Expression Keys
+{:.no_toc}
+
+Flink also has two alternative ways of defining keys: tuple keys and expression
+keys. With this you can specify keys using tuple field indices or expressions
+for selecting fields of objects. We don't recommend using these today but you
+can refer to the Javadoc of DataStream to learn about them. Using a KeySelector
+function is strictly superior: with Java lambdas they are easy to use and they
+have potentially less overhead at runtime.
+
+{% top %}
+
 ## Using Keyed State
 
 The keyed state interfaces provides access to different types of state that are all scoped to
@@ -87,7 +145,7 @@ want to retrieve, you create either a `ValueStateDescriptor`, a `ListStateDescri
 a `ReducingStateDescriptor`, a `FoldingStateDescriptor` or a `MapStateDescriptor`.
 
 State is accessed using the `RuntimeContext`, so it is only possible in *rich functions*.
-Please see [here]({{ site.baseurl }}/dev/api_concepts.html#rich-functions) for
+Please see [here]({% link dev/user_defined_functions.md %}#rich-functions) for
 information about that, but we will also see an example shortly. The `RuntimeContext` that
 is available in a `RichFunction` has these methods for accessing state:
 

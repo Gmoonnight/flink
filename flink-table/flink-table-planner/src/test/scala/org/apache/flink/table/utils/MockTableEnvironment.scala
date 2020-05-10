@@ -20,7 +20,7 @@ package org.apache.flink.table.utils
 
 import org.apache.flink.api.common.JobExecutionResult
 import org.apache.flink.api.common.typeinfo.TypeInformation
-import org.apache.flink.table.api.{Table, TableConfig, TableEnvironment, TableResult}
+import org.apache.flink.table.api.{ExplainDetail, Table, TableConfig, TableEnvironment, TableResult}
 import org.apache.flink.table.catalog.Catalog
 import org.apache.flink.table.descriptors.{ConnectTableDescriptor, ConnectorDescriptor}
 import org.apache.flink.table.expressions.Expression
@@ -62,6 +62,8 @@ class MockTableEnvironment extends TableEnvironment {
 
   override def listTables(): Array[String] = ???
 
+  override def listViews(): Array[String] = ???
+
   override def listUserDefinedFunctions(): Array[String] = ???
 
   override def listFunctions(): Array[String] = ???
@@ -71,6 +73,8 @@ class MockTableEnvironment extends TableEnvironment {
   override def explain(table: Table, extended: Boolean): String = ???
 
   override def explain(extended: Boolean): String = ???
+
+  override def explainSql(statement: String, extraDetails: ExplainDetail*): String = ???
 
   override def getCompletionHints(statement: String, position: Int): Array[String] = ???
 

@@ -20,8 +20,9 @@ package org.apache.flink.table.filesystem;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.core.fs.Path;
-import org.apache.flink.table.dataformat.BaseRow;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.descriptors.DescriptorProperties;
+import org.apache.flink.table.factories.FileSystemFormatFactory;
 import org.apache.flink.table.factories.TableFactory;
 import org.apache.flink.table.factories.TableFactoryService;
 import org.apache.flink.table.factories.TableSinkFactory;
@@ -50,8 +51,8 @@ import static org.apache.flink.table.descriptors.Schema.SCHEMA;
  * <p>Migrate to new source/sink interface after FLIP-95 is ready.
  */
 public class FileSystemTableFactory implements
-		TableSourceFactory<BaseRow>,
-		TableSinkFactory<BaseRow> {
+		TableSourceFactory<RowData>,
+		TableSinkFactory<RowData> {
 
 	public static final String CONNECTOR_VALUE = "filesystem";
 
@@ -70,6 +71,24 @@ public class FileSystemTableFactory implements
 			.defaultValue("__DEFAULT_PARTITION__")
 			.withDescription("The default partition name in case the dynamic partition" +
 					" column value is null/empty string");
+
+	public static final ConfigOption<Long> SINK_ROLLING_POLICY_FILE_SIZE = key("sink.rolling-policy.file-size")
+			.longType()
+			.defaultValue(1024L * 1024L * 128L)
+			.withDescription("The maximum part file size before rolling (by default 128MB).");
+
+	public static final ConfigOption<Long> SINK_ROLLING_POLICY_TIME_INTERVAL = key("sink.rolling-policy.time.interval")
+			.longType()
+			.defaultValue(30L * 60 * 1000L)
+			.withDescription("The maximum time duration a part file can stay open before rolling" +
+					" (by default 30 min to avoid to many small files).");
+
+	public static final ConfigOption<Boolean> SINK_SHUFFLE_BY_PARTITION = key("sink.shuffle-by-partition.enable")
+			.booleanType()
+			.defaultValue(false)
+			.withDescription("The option to enable shuffle data by dynamic partition fields in sink" +
+					" phase, this can greatly reduce the number of file for filesystem sink but may" +
+					" lead data skew, the default value is disabled.");
 
 	@Override
 	public Map<String, String> requiredContext() {
@@ -94,6 +113,10 @@ public class FileSystemTableFactory implements
 				DescriptorProperties.PARTITION_KEYS_NAME);
 		properties.add(PARTITION_DEFAULT_NAME.key());
 
+		properties.add(SINK_ROLLING_POLICY_FILE_SIZE.key());
+		properties.add(SINK_ROLLING_POLICY_TIME_INTERVAL.key());
+		properties.add(SINK_SHUFFLE_BY_PARTITION.key());
+
 		// format
 		properties.add(FORMAT);
 		properties.add(FORMAT + ".*");
@@ -102,7 +125,7 @@ public class FileSystemTableFactory implements
 	}
 
 	@Override
-	public TableSource<BaseRow> createTableSource(TableSourceFactory.Context context) {
+	public TableSource<RowData> createTableSource(TableSourceFactory.Context context) {
 		DescriptorProperties properties = new DescriptorProperties();
 		properties.putProperties(context.getTable().getProperties());
 
@@ -115,15 +138,20 @@ public class FileSystemTableFactory implements
 	}
 
 	@Override
-	public TableSink<BaseRow> createTableSink(TableSinkFactory.Context context) {
+	public TableSink<RowData> createTableSink(TableSinkFactory.Context context) {
 		DescriptorProperties properties = new DescriptorProperties();
 		properties.putProperties(context.getTable().getProperties());
 
 		return new FileSystemTableSink(
+				context.isBounded(),
 				context.getTable().getSchema(),
 				new Path(properties.getString(PATH)),
 				context.getTable().getPartitionKeys(),
 				getPartitionDefaultName(properties),
+				properties.getOptionalLong(SINK_ROLLING_POLICY_FILE_SIZE.key())
+						.orElse(SINK_ROLLING_POLICY_FILE_SIZE.defaultValue()),
+				properties.getOptionalLong(SINK_ROLLING_POLICY_TIME_INTERVAL.key())
+						.orElse(SINK_ROLLING_POLICY_TIME_INTERVAL.defaultValue()),
 				getFormatProperties(context.getTable().getProperties()));
 	}
 

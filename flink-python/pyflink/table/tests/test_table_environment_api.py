@@ -35,8 +35,8 @@ from pyflink.table.types import RowType
 from pyflink.testing import source_sink_utils
 from pyflink.testing.test_case_utils import PyFlinkStreamTableTestCase, PyFlinkBatchTableTestCase, \
     PyFlinkBlinkBatchTableTestCase
-from pyflink.util.exceptions import TableException
 from pyflink.util.utils import get_j_env_configuration
+from pyflink.table.explain_detail import ExplainDetail
 
 
 class TableEnvironmentTest(object):
@@ -242,6 +242,33 @@ class StreamTableEnvironmentTests(TableEnvironmentTest, PyFlinkStreamTableTestCa
         actual = t_env.explain(extended=True)
         assert isinstance(actual, str)
 
+    def test_explain_sql_without_explain_detail(self):
+        t_env = self.t_env
+        source = t_env.from_elements([(1, "Hi", "Hello"), (2, "Hello", "Hello")], ["a", "b", "c"])
+        field_names = ["a", "b", "c"]
+        field_types = [DataTypes.BIGINT(), DataTypes.STRING(), DataTypes.STRING()]
+        t_env.register_table_sink(
+            "sinks",
+            source_sink_utils.TestAppendSink(field_names, field_types))
+
+        result = t_env.explain_sql("select a + 1, b, c from %s" % source)
+
+        assert isinstance(result, str)
+
+    def test_explain_sql_with_explain_detail(self):
+        t_env = self.t_env
+        source = t_env.from_elements([(1, "Hi", "Hello"), (2, "Hello", "Hello")], ["a", "b", "c"])
+        field_names = ["a", "b", "c"]
+        field_types = [DataTypes.BIGINT(), DataTypes.STRING(), DataTypes.STRING()]
+        t_env.register_table_sink(
+            "sinks",
+            source_sink_utils.TestAppendSink(field_names, field_types))
+
+        result = t_env.explain_sql(
+            "select a + 1, b, c from %s" % source, ExplainDetail.CHANGELOG_MODE)
+
+        assert isinstance(result, str)
+
     def test_create_table_environment(self):
         table_config = TableConfig()
         table_config.set_max_generated_code_length(32000)
@@ -275,16 +302,16 @@ class StreamTableEnvironmentTests(TableEnvironmentTest, PyFlinkStreamTableTestCa
 
         self.assertEqual(
             planner.getClass().getName(),
-            "org.apache.flink.table.planner.StreamPlanner")
+            "org.apache.flink.table.planner.delegation.StreamPlanner")
 
         t_env = StreamTableEnvironment.create(
-            environment_settings=EnvironmentSettings.new_instance().use_blink_planner().build())
+            environment_settings=EnvironmentSettings.new_instance().use_old_planner().build())
 
         planner = t_env._j_tenv.getPlanner()
 
         self.assertEqual(
             planner.getClass().getName(),
-            "org.apache.flink.table.planner.delegation.StreamPlanner")
+            "org.apache.flink.table.planner.StreamPlanner")
 
     def test_table_environment_with_blink_planner(self):
         self.env.set_parallelism(1)
@@ -400,8 +427,9 @@ class BatchTableEnvironmentTests(TableEnvironmentTest, PyFlinkBatchTableTestCase
         t_env.sql_update("insert into sink1 select * from %s where a > 100" % source)
         t_env.sql_update("insert into sink2 select * from %s where a < 100" % source)
 
-        with self.assertRaises(TableException):
-            t_env.explain(extended=True)
+        actual = t_env.explain(extended=True)
+
+        assert isinstance(actual, str)
 
     def test_create_table_environment(self):
         table_config = TableConfig()
@@ -485,3 +513,19 @@ class BlinkBatchTableEnvironmentTests(PyFlinkBlinkBatchTableTestCase):
 
         actual = t_env.explain(extended=True)
         self.assertIsInstance(actual, str)
+
+    def test_register_java_function(self):
+        t_env = self.t_env
+
+        t_env.register_java_function(
+            "scalar_func", "org.apache.flink.table.expressions.utils.RichFunc0")
+
+        t_env.register_java_function(
+            "agg_func", "org.apache.flink.table.functions.aggfunctions.ByteMaxAggFunction")
+
+        t_env.register_java_function(
+            "table_func", "org.apache.flink.table.utils.TableFunc2")
+
+        actual = t_env.list_user_defined_functions()
+        expected = ['scalar_func', 'agg_func', 'table_func']
+        self.assert_equals(actual, expected)
